@@ -4,6 +4,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace DnFileVault.Sync;
 
@@ -147,6 +148,7 @@ internal sealed class VaultClient(HttpClient httpClient, Settings settings)
     {
         PropertyNameCaseInsensitive = true,
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        Converters = { new FlexibleDateTimeOffsetConverter() },
     };
 
     public async Task<SyncResult> SyncAsync(CancellationToken cancellationToken)
@@ -582,6 +584,53 @@ internal sealed class VaultClient(HttpClient httpClient, Settings settings)
         string LocalPath,
         string LocalSha256
     );
+
+    private sealed class FlexibleDateTimeOffsetConverter : JsonConverter<DateTimeOffset?>
+    {
+        public override DateTimeOffset? Read(
+            ref Utf8JsonReader reader,
+            Type typeToConvert,
+            JsonSerializerOptions options
+        )
+        {
+            if (reader.TokenType == JsonTokenType.Null)
+                return null;
+            if (reader.TokenType != JsonTokenType.String)
+                throw new JsonException("DNFileVault timestamps must be strings or null.");
+
+            var value = reader.GetString();
+            if (string.IsNullOrWhiteSpace(value))
+                return null;
+            if (
+                DateTimeOffset.TryParse(
+                    value,
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.AllowWhiteSpaces
+                        | DateTimeStyles.AssumeUniversal
+                        | DateTimeStyles.AdjustToUniversal,
+                    out var timestamp
+                )
+            )
+                return timestamp;
+
+            throw new JsonException($"DNFileVault returned an invalid timestamp: '{value}'.");
+        }
+
+        public override void Write(
+            Utf8JsonWriter writer,
+            DateTimeOffset? value,
+            JsonSerializerOptions options
+        )
+        {
+            if (value is null)
+            {
+                writer.WriteNullValue();
+                return;
+            }
+
+            writer.WriteStringValue(value.Value.UtcDateTime);
+        }
+    }
 }
 
 internal sealed record SyncResult(
